@@ -1,25 +1,58 @@
 # Geany Copilot
 
-A native [Geany](https://www.geany.org/) plugin that sends the surrounding
-text of your document to an LLM backend and inserts the response back into
-the editor — a lightweight, editor-native AI assistant.
+A native [Geany](https://www.geany.org/) plugin that sends the text around
+your cursor (or your current selection) to an LLM backend and inserts the
+response back into the document — a lightweight, editor-native AI assistant.
 
 This is `v0.2`, a full rewrite of the plugin in Rust using hand-written FFI
-bindings to the Geany/GTK3/GLib C APIs (no external `geany-rs` crate exists,
-so the bindings in `src/ffi/` are maintained directly against the Geany 2.0
-headers). It replaces the earlier Lua-script-based version of the project.
+bindings to the Geany/GTK3/GLib C APIs (no maintained `geany-rs` crate exists
+on crates.io or GitHub, so the bindings in `src/ffi/` are maintained directly
+against the installed Geany headers). It replaces the earlier Lua-script
+version of the project (`copilot.lua` / `copywriter.lua`); see [Coming from
+the Lua version](#coming-from-the-lua-version) below if you're upgrading
+from that.
 
 ## Features
 
-- Toolbar button ("Ask Copilot") and status bar backend/preset selectors
-- Streaming responses (SSE) via `curl`, rendered incrementally into the buffer
-- Two backend types:
+- Toolbar button ("Ask Copilot") plus two configurable keybindings (see
+  [Usage](#usage))
+- A sidebar panel showing the request payload, any error, and — for
+  reasoning models — a live "thinking" log, styled to match your editor's
+  color scheme. Live token count and tokens/second are shown while a
+  request is running, with **Stop** (keep the partial response) and
+  **Cancel** (discard it) buttons
+- Two backend types, selectable per preset:
   - **Ollama** (local models)
-  - **OpenAI-compatible** APIs (OpenAI, DeepSeek, and other compatible providers)
-- Multiple named presets, each with its own backend, model, URL, API key, and
-  optional system prompt
-- Config stored in `GKeyFile` format, compatible with prior plugin versions,
-  at `~/.config/geany/plugins/geany-copilot/geany-copilot.conf`
+  - **OpenAI-compatible** APIs (OpenAI, DeepSeek, and other compatible
+    providers, including reasoning models that stream `reasoning_content`)
+- Multiple named presets, each with its own backend, URL, model, API key,
+  system prompt, temperature, and insert mode — add/save/delete presets and
+  switch between them from Preferences or the status bar
+- A "Select..." button per preset that fetches the backend's live model
+  list instead of typing model names by hand
+- Three insert modes: insert at cursor, replace the current selection, or
+  append after the selection
+- Optional automatic language hint (based on the file extension) appended
+  to the request so the model knows what language it's looking at
+- Configurable request timeout (30s–10min) and max response tokens, both
+  also adjustable from the status bar
+- Config stored in `GKeyFile` (`.ini`-style) format at
+  `~/.config/geany/plugins/geany-copilot/geany-copilot.conf`
+
+## How it works
+
+When triggered, the plugin uses your current selection as context if you
+have one; otherwise it grabs roughly 100 characters before and after the
+cursor. That context (plus the optional language hint and system prompt) is
+sent to the configured backend over `curl`, streamed via SSE.
+
+Note that streaming only drives the **live stats and thinking log** in the
+sidebar panel while the request is in flight — the response itself is
+inserted into your document once as a whole, when the request completes (or
+when you click **Stop**), not incrementally line-by-line.
+
+Only one request can be in flight at a time; triggering "Ask Copilot" while
+a request is already running is a no-op.
 
 ## Building
 
@@ -33,6 +66,12 @@ or, using the provided Makefile:
 
 ```bash
 make build
+```
+
+Run the unit tests (payload building, streaming/parsing logic) with:
+
+```bash
+cargo test
 ```
 
 ## Installing
@@ -59,11 +98,57 @@ make uninstall
 2. **Tools → Plugin Manager**
 3. Check **"Geany Copilot"** in the list
 4. An **"Ask Copilot"** button appears in the toolbar
-5. Open a document and click it to send the surrounding text to the
-   configured backend
 
-Configure backends, models, and API keys via **Tools → Preferences →
-Geany Copilot**, or the plugin's own preset editor.
+## Configuration
+
+Open **Tools → Preferences → Geany Copilot** (or click the preset editor
+from the plugin) to manage presets:
+
+- **Add / Save / Delete** a preset
+- **Backend type**: Ollama or OpenAI-compatible
+- **URL**, **model** (or use **Select...** to fetch the backend's model
+  list), **API key**
+- **System Prompt**: opens a dedicated multiline editor
+- **Temperature** (0.0–2.0, leave blank to let the server decide)
+- **Insert mode**: cursor / replace selection / append after selection
+- **Include language hint** toggle
+
+Request timeout and max response tokens are set from the status bar
+dropdowns and apply to all presets.
+
+## Usage
+
+1. (Optional) Assign keybindings: **Edit → Preferences → Keybindings**,
+   under the "Geany Copilot" group, bind **"Ask Copilot"** and/or **"Next
+   Copilot Preset"** to whatever shortcuts you like — neither has a default.
+2. Select the text you want as context, or just place your cursor where you
+   want a suggestion.
+3. Click the toolbar button (or use your keybinding).
+4. Watch progress in the sidebar panel; click **Stop** to keep whatever has
+   streamed so far, or **Cancel** to discard the request entirely.
+5. On completion, the response is inserted per the active preset's insert
+   mode.
+
+## Known limitations
+
+- Pinned to the Geany 2.0 plugin ABI/API this was built against
+  (API 247 / ABI `73 << 8`) — it is not guaranteed to load on other Geany
+  versions.
+- No request queue (see [How it works](#how-it-works)).
+- The Geany/GTK/Scintilla integration layer (`config.rs`, `ui.rs`,
+  `configure.rs`, and the FFI plumbing in `request.rs`) is raw `unsafe` C
+  FFI with global mutable state (e.g. a single `static mut ACTIVE_REQUEST`),
+  not safe wrappers. The backend/streaming *logic* (`backend.rs`: payload
+  building, response parsing) is plain safe Rust and has unit test coverage
+  (`cargo test`); the FFI shell around it does not.
+
+## Coming from the Lua version
+
+The old `copilot.lua` / `copywriter.lua` scripts (GeanyLua) stored settings
+as JSON at `~/.config/geany/plugins/geanylua/geany-copilot/*.json`. This
+Rust plugin uses a different config format and path (see
+[Configuration](#configuration)) and does **not** read the old JSON files —
+you'll need to re-enter your API key and settings once after switching.
 
 ## Project layout
 
@@ -79,13 +164,15 @@ src/
 ├── backend.rs       # BackendType enum, BackendPreset, URL & payload generators
 ├── config.rs        # GKeyFile config loader/saver & preset initialization
 ├── request.rs       # Request lifecycle & streaming worker thread
-├── ui.rs            # Toolbar button & status bar combo boxes
+├── ui.rs            # Toolbar button, status bar, and sidebar panel
 └── configure.rs      # Preferences / Configure dialog logic
 ```
 
 See `docs/migration.md` for background on the rewrite from the earlier
-C++/Lua versions.
+C++ (`try4`) version.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE). Interacts with external/local APIs on your
+behalf; keep your API keys secure and be aware of any costs your chosen
+backend charges.
