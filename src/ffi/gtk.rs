@@ -4,28 +4,15 @@ use std::os::raw::{c_int, c_ulong, c_void};
 pub const GTK_ORIENTATION_HORIZONTAL: c_int = 0;
 pub const GTK_ORIENTATION_VERTICAL: c_int = 1;
 
-pub const GTK_RESPONSE_NONE: c_int = -1;
-pub const GTK_RESPONSE_REJECT: c_int = -2;
-pub const GTK_RESPONSE_ACCEPT: c_int = -3;
 pub const GTK_RESPONSE_OK: c_int = -5;
 pub const GTK_RESPONSE_CANCEL: c_int = -6;
-pub const GTK_RESPONSE_CLOSE: c_int = -7;
-pub const GTK_RESPONSE_DELETE_EVENT: c_int = -4;
 pub const GTK_RESPONSE_APPLY: c_int = -10;
 pub const GTK_DIALOG_MODAL: c_int = 1;
 pub const GTK_POLICY_AUTOMATIC: c_int = 0;
 
-pub const GTK_MESSAGE_INFO: c_int = 0;
-pub const GTK_MESSAGE_WARNING: c_int = 1;
-pub const GTK_MESSAGE_QUESTION: c_int = 2;
 pub const GTK_MESSAGE_ERROR: c_int = 3;
 
-pub const GTK_BUTTONS_NONE: c_int = 0;
-pub const GTK_BUTTONS_OK: c_int = 1;
 pub const GTK_BUTTONS_CLOSE: c_int = 2;
-pub const GTK_BUTTONS_CANCEL: c_int = 3;
-pub const GTK_BUTTONS_YES_NO: c_int = 4;
-pub const GTK_BUTTONS_OK_CANCEL: c_int = 5;
 
 pub const GTK_ICON_SIZE_BUTTON: c_int = 4;
 pub const GTK_WRAP_WORD_CHAR: c_int = 3;
@@ -34,24 +21,19 @@ pub type GtkWidget = c_void;
 pub type GtkDialog = c_void;
 pub type GtkWindow = c_void;
 pub type GtkBox = c_void;
-pub type GtkGrid = c_void;
 pub type GtkLabel = c_void;
 pub type GtkEntry = c_void;
-pub type GtkButton = c_void;
 pub type GtkRadioButton = c_void;
 pub type GtkComboBox = c_void;
 pub type GtkComboBoxText = c_void;
 pub type GtkNotebook = c_void;
 pub type GtkToolItem = c_void;
-pub type GtkToolButton = c_void;
 pub type GtkToolbar = c_void;
 pub type GtkTextView = c_void;
 pub type GtkTextBuffer = c_void;
-pub type GtkSpinner = c_void;
 pub type GtkContainer = c_void;
 pub type GtkScrolledWindow = c_void;
 pub type GtkPaned = c_void;
-pub type GdkEvent = c_void;
 pub type PangoFontDescription = c_void;
 
 #[repr(C)]
@@ -84,9 +66,7 @@ pub struct GtkTextIter {
 }
 
 extern "C" {
-    pub fn gtk_widget_show(widget: *mut GtkWidget);
     pub fn gtk_widget_show_all(widget: *mut GtkWidget);
-    pub fn gtk_widget_hide(widget: *mut GtkWidget);
     pub fn gtk_widget_destroy(widget: *mut GtkWidget);
     pub fn gtk_widget_get_parent(widget: *mut GtkWidget) -> *mut GtkWidget;
     pub fn gtk_widget_set_sensitive(widget: *mut GtkWidget, sensitive: GBoolean);
@@ -109,21 +89,10 @@ extern "C" {
         padding: c_int,
     );
 
-    pub fn gtk_grid_new() -> *mut GtkWidget;
-    pub fn gtk_grid_attach(
-        grid: *mut GtkGrid,
-        child: *mut GtkWidget,
-        left: c_int,
-        top: c_int,
-        width: c_int,
-        height: c_int,
-    );
-
     pub fn gtk_label_new(str: *const GChar) -> *mut GtkWidget;
     pub fn gtk_label_set_text(label: *mut GtkLabel, str: *const GChar);
     pub fn gtk_label_set_line_wrap(label: *mut GtkLabel, wrap: GBoolean);
     pub fn gtk_label_set_xalign(label: *mut GtkLabel, xalign: f32);
-    pub fn gtk_label_set_selectable(label: *mut GtkLabel, setting: GBoolean);
 
     pub fn gtk_entry_new() -> *mut GtkWidget;
     pub fn gtk_entry_get_text(entry: *mut GtkEntry) -> *const GChar;
@@ -133,8 +102,6 @@ extern "C" {
 
     pub fn gtk_button_new_with_label(label: *const GChar) -> *mut GtkWidget;
     pub fn gtk_check_button_new_with_label(label: *const GChar) -> *mut GtkWidget;
-    pub fn gtk_button_set_label(button: *mut GtkButton, label: *const GChar);
-    pub fn gtk_menu_item_new_with_label(label: *const GChar) -> *mut GtkWidget;
     pub fn gtk_radio_button_new_with_label_from_widget(
         radio_group_member: *mut GtkRadioButton,
         label: *const GChar,
@@ -197,11 +164,6 @@ extern "C" {
     pub fn gtk_text_view_set_wrap_mode(text_view: *mut GtkTextView, wrap_mode: c_int);
     pub fn gtk_text_view_set_monospace(text_view: *mut GtkTextView, monospace: GBoolean);
 
-    pub fn gtk_text_buffer_insert_at_cursor(
-        buffer: *mut GtkTextBuffer,
-        text: *const GChar,
-        len: c_int,
-    );
     pub fn gtk_text_buffer_insert(
         buffer: *mut GtkTextBuffer,
         iter: *mut GtkTextIter,
@@ -234,7 +196,6 @@ extern "C" {
     ) -> *mut GtkWidget;
     pub fn gtk_dialog_run(dialog: *mut GtkDialog) -> c_int;
     pub fn gtk_dialog_get_content_area(dialog: *mut GtkDialog) -> *mut GtkWidget;
-    pub fn gtk_dialog_get_widget_for_response(dialog: *mut GtkDialog, response_id: c_int) -> *mut GtkWidget;
 
     pub fn gtk_message_dialog_new(
         parent: *mut GtkWindow,
@@ -245,11 +206,8 @@ extern "C" {
         ...
     ) -> *mut GtkWidget;
 
-    pub fn gtk_window_set_title(window: *mut GtkWindow, title: *const GChar);
     pub fn gtk_window_set_default_size(window: *mut GtkWindow, width: c_int, height: c_int);
     pub fn gtk_window_set_destroy_with_parent(window: *mut GtkWindow, setting: GBoolean);
-    pub fn gtk_window_present(window: *mut GtkWindow);
-    pub fn gtk_window_resize(window: *mut GtkWindow, width: c_int, height: c_int);
 
     pub fn gtk_statusbar_get_message_area(statusbar: *mut GtkWidget) -> *mut GtkWidget;
     pub fn gtk_widget_set_size_request(widget: *mut GtkWidget, width: c_int, height: c_int);
@@ -271,10 +229,6 @@ extern "C" {
     pub fn gtk_scrolled_window_set_policy(window: *mut GtkScrolledWindow, hscrollbar_policy: c_int, vscrollbar_policy: c_int);
     pub fn gtk_scrolled_window_set_min_content_width(window: *mut GtkScrolledWindow, width: c_int);
     pub fn gtk_scrolled_window_set_min_content_height(window: *mut GtkScrolledWindow, height: c_int);
-
-    pub fn gtk_spinner_new() -> *mut GtkWidget;
-    pub fn gtk_spinner_start(spinner: *mut GtkSpinner);
-    pub fn gtk_spinner_stop(spinner: *mut GtkSpinner);
 
     pub fn g_signal_connect_data(
         instance: GPointer,

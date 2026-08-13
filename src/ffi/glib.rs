@@ -1,15 +1,11 @@
-use std::os::raw::{c_char, c_double, c_int, c_longlong, c_uint, c_ulonglong, c_void};
+use std::os::raw::{c_char, c_int, c_longlong, c_uint, c_void};
 
 pub type GBoolean = c_int;
 pub type GChar = c_char;
 pub type GInt = c_int;
 pub type GUint = c_uint;
 pub type GInt64 = c_longlong;
-pub type GUint64 = c_ulonglong;
-pub type GDouble = c_double;
-pub type GSize = usize;
 pub type GPointer = *mut c_void;
-pub type GConstPointer = *const c_void;
 
 pub type GCallback = Option<unsafe extern "C" fn()>;
 pub type GDestroyNotify = Option<unsafe extern "C" fn(GPointer)>;
@@ -39,8 +35,6 @@ pub struct GDateTime {
 
 extern "C" {
     pub fn g_free(mem: GPointer);
-    pub fn g_strdup(str: *const GChar) -> *mut GChar;
-    pub fn g_strcmp0(str1: *const GChar, str2: *const GChar) -> c_int;
 
     pub fn g_get_monotonic_time() -> GInt64;
     pub fn g_idle_add(function: GSourceFunc, data: GPointer) -> GUint;
@@ -95,7 +89,6 @@ extern "C" {
     pub fn g_get_user_config_dir() -> *const GChar;
     pub fn g_build_filename(first_element: *const GChar, ...) -> *mut GChar;
     pub fn g_mkdir_with_parents(pathname: *const GChar, mode: c_int) -> c_int;
-    pub fn g_clear_error(error: *mut *mut GError);
     pub fn g_error_free(error: *mut GError);
 }
 
