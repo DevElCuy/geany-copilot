@@ -83,7 +83,13 @@ unsafe fn apply_editor_style(text_view: *mut GtkWidget, sci: *mut ScintillaObjec
         gtk_widget_override_background_color(text_view, state, &background);
     }
 
-    let mut font = [0i8; 128];
+    // SCI_STYLEGETFONT copies the whole font name with no bounds check; ask
+    // for the length first (null buffer) instead of trusting a fixed buffer.
+    let font_len = scintilla_send_message(sci, SCI_STYLEGETFONT, STYLE_DEFAULT, 0);
+    if font_len <= 0 {
+        return;
+    }
+    let mut font = vec![0i8; font_len as usize + 1];
     scintilla_send_message(
         sci,
         SCI_STYLEGETFONT,

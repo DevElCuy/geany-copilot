@@ -501,7 +501,9 @@ pub unsafe extern "C" fn on_request_finished(user_data: GPointer) -> GBoolean {
             }
             _ => req.response_text.clone(),
         };
-        let response = CString::new(response_text).unwrap_or_default();
+        // The model's text may legally contain NUL bytes; strip them so one
+        // NUL can't silently void the whole insert at the CString boundary.
+        let response = CString::new(response_text.replace('\0', "")).unwrap_or_default();
         match req.insert_mode {
             InsertMode::ReplaceSelection if end > start => {
                 sci_set_selection_start(sci, start);
