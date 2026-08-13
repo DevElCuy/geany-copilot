@@ -68,11 +68,18 @@ or, using the provided Makefile:
 make build
 ```
 
-Run the unit tests (payload building, streaming/parsing logic) with:
+Run the unit tests with:
 
 ```bash
 cargo test
 ```
+
+The suite (65 tests) covers all of the backend logic and config persistence
+(100% line coverage of `backend.rs` and `config.rs`), the request worker and
+streaming state machine (~87% of `request.rs`, exercised against an
+in-process HTTP server), and the null-safety contracts of the UI callbacks.
+The GTK widget layer itself needs a running Geany and is not unit-tested
+(see [Known limitations](#known-limitations)).
 
 ## Installing
 
@@ -142,9 +149,13 @@ every request, and plain `http://` would expose both on the network.
 - The Geany/GTK/Scintilla integration layer (`config.rs`, `ui.rs`,
   `configure.rs`, and the FFI plumbing in `request.rs`) is raw `unsafe` C
   FFI with global mutable state (e.g. a single `static mut ACTIVE_REQUEST`),
-  not safe wrappers. The backend/streaming *logic* (`backend.rs`: payload
-  building, response parsing) is plain safe Rust and has unit test coverage
-  (`cargo test`); the FFI shell around it does not.
+  not safe wrappers. Everything that can run without a live Geany/GTK
+  session is unit-tested — backend logic, config load/save (via a fake
+  plugin pointing at a temp dir), the streaming worker (via a local HTTP
+  server), and the request lifecycle. What remains untested is the code
+  that inherently needs a running editor: widget construction in `ui.rs` /
+  `configure.rs`, the plugin entry points in `lib.rs`, and the
+  Scintilla read/insert calls in `request.rs`.
 
 ## Coming from the Lua version
 

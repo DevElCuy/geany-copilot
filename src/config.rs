@@ -287,3 +287,200 @@ pub unsafe fn save_config(plugin: *mut GeanyPlugin) {
     }
     g_key_file_free(key_file);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::globals::test_globals_guard;
+    use crate::test_support::{fake_plugin, temp_dir};
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn preset_group_names_are_indexed() {
+        assert_eq!(preset_group_name(0), "preset0");
+        assert_eq!(preset_group_name(12), "preset12");
+    }
+
+    #[test]
+    fn default_preset_targets_local_ollama() {
+        let preset = make_default_preset();
+        assert_eq!(preset.name, "Local Ollama");
+        assert_eq!(preset.backend_type, BackendType::Ollama);
+        assert_eq!(preset.uri, DEFAULT_OLLAMA_URI);
+        assert!(preset.api_key.is_empty());
+        assert!(preset.include_language_hint);
+        assert_eq!(preset.insert_mode, InsertMode::Cursor);
+    }
+
+    #[test]
+    fn key_file_getters_fall_back_and_recover_from_type_errors() {
+        unsafe {
+            let key_file = g_key_file_new();
+            assert_eq!(key_file_get_string_default(key_file, "g", "missing", "fb"), "fb");
+            assert_eq!(key_file_get_integer_default(key_file, "g", "missing", 7), 7);
+
+            let c_g = CString::new("g").unwrap();
+            let c_k = CString::new("k").unwrap();
+            let c_v = CString::new("value").unwrap();
+            g_key_file_set_string(key_file, c_g.as_ptr(), c_k.as_ptr(), c_v.as_ptr());
+            assert_eq!(key_file_get_string_default(key_file, "g", "k", "fb"), "value");
+            // "value" is not an integer: the error branch must free the GError
+            // and fall back
+            assert_eq!(key_file_get_integer_default(key_file, "g", "k", 3), 3);
+
+            let c_n = CString::new("n").unwrap();
+            g_key_file_set_integer(key_file, c_g.as_ptr(), c_n.as_ptr(), 42);
+            assert_eq!(key_file_get_integer_default(key_file, "g", "n", 0), 42);
+            g_key_file_free(key_file);
+        }
+    }
+
+    #[test]
+    fn config_paths_fall_back_to_the_user_config_dir() {
+        unsafe {
+            let dir = build_config_dir(ptr::null_mut());
+            assert!(dir.ends_with("plugins/geany-copilot"), "{}", dir);
+            let file = build_config_file_path(ptr::null_mut());
+            assert!(file.ends_with("plugins/geany-copilot/geany-copilot.conf"), "{}", file);
+        }
+    }
+
+    #[test]
+    fn config_file_permissions_are_forced_to_owner_only() {
+        let dir = temp_dir("perm");
+        let path = dir.join("perm-probe.conf");
+        std::fs::write(&path, "k=v").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        restrict_config_file_permissions(path.to_str().unwrap());
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+        restrict_config_file_permissions("/nonexistent/geany-copilot-probe"); // must not panic
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn save_failure_is_swallowed_without_touching_permissions() {
+        let _guard = test_globals_guard();
+        let dir = temp_dir("savefail");
+        // Point the fake config dir at a regular file: mkdir and the GKeyFile
+        // save both fail, and save_config must survive that.
+        let blocker = dir.join("blocker");
+        std::fs::write(&blocker, "not a directory").unwrap();
+        let mut fake = fake_plugin(&blocker);
+        unsafe {
+            save_config(fake.ptr());
+        }
+        assert!(std::fs::metadata(&blocker).unwrap().is_file());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn missing_config_yields_the_default_preset() {
+        let _guard = test_globals_guard();
+        let dir = temp_dir("noconf");
+        let mut fake = fake_plugin(&dir);
+        unsafe {
+            load_config(fake.ptr());
+            with_global_state(|state| {
+                assert_eq!(state.presets.len(), 1);
+                assert_eq!(state.presets[0].name, "Local Ollama");
+            });
+            assert_eq!(ACTIVE_PRESET_INDEX.load(Ordering::SeqCst), 0);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn config_round_trips_through_a_fake_geany_config_dir() {
+        let _guard = test_globals_guard();
+        let dir = temp_dir("roundtrip");
+        let mut fake = fake_plugin(&dir);
+        unsafe {
+            with_global_state(|state| {
+                state.presets = vec![
+                    make_default_preset(),
+                    BackendPreset {
+                        name: "Remote".to_string(),
+                        backend_type: BackendType::OpenAICompatible,
+                        uri: "https://api.example.com/v1".to_string(),
+                        model: "gpt-test".to_string(),
+                        system_prompt: "line1\nline2".to_string(),
+                        api_key: "sk-abc".to_string(),
+                        temperature: "0.7".to_string(),
+                        include_language_hint: false,
+                        insert_mode: InsertMode::ReplaceSelection,
+                    },
+                ];
+            });
+            ACTIVE_PRESET_INDEX.store(1, Ordering::SeqCst);
+            CURL_TIMEOUT_INDEX.store(2, Ordering::SeqCst);
+            MAX_TOKENS.store(512, Ordering::SeqCst);
+            THINKING_LOG_ENABLED.store(0, Ordering::SeqCst);
+            save_config(fake.ptr());
+
+            let conf = dir.join("plugins/geany-copilot/geany-copilot.conf");
+            assert!(conf.exists());
+            assert_eq!(
+                std::fs::metadata(&conf).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+
+            // scramble everything, then load back from disk
+            with_global_state(|state| {
+                state.presets.clear();
+                state.api_key.clear();
+            });
+            ACTIVE_PRESET_INDEX.store(0, Ordering::SeqCst);
+            CURL_TIMEOUT_INDEX.store(0, Ordering::SeqCst);
+            MAX_TOKENS.store(0, Ordering::SeqCst);
+            THINKING_LOG_ENABLED.store(1, Ordering::SeqCst);
+            load_config(fake.ptr());
+
+            assert_eq!(ACTIVE_PRESET_INDEX.load(Ordering::SeqCst), 1);
+            assert_eq!(CURL_TIMEOUT_INDEX.load(Ordering::SeqCst), 2);
+            assert_eq!(MAX_TOKENS.load(Ordering::SeqCst), 512);
+            assert_eq!(THINKING_LOG_ENABLED.load(Ordering::SeqCst), 0);
+            with_global_state(|state| {
+                assert_eq!(state.presets.len(), 2);
+                let p = &state.presets[1];
+                assert_eq!(p.name, "Remote");
+                assert_eq!(p.backend_type, BackendType::OpenAICompatible);
+                assert_eq!(p.uri, "https://api.example.com/v1");
+                assert_eq!(p.model, "gpt-test");
+                assert_eq!(p.system_prompt, "line1\nline2");
+                assert_eq!(p.api_key, "sk-abc");
+                assert_eq!(p.temperature, "0.7");
+                assert!(!p.include_language_hint);
+                assert_eq!(p.insert_mode, InsertMode::ReplaceSelection);
+                // flat state mirrors the active preset
+                assert_eq!(state.api_key, "sk-abc");
+                assert_eq!(state.model_name, "gpt-test");
+            });
+
+            // an out-of-range active index in the file is clamped to 0
+            ACTIVE_PRESET_INDEX.store(9, Ordering::SeqCst);
+            save_config(fake.ptr());
+            load_config(fake.ptr());
+            assert_eq!(ACTIVE_PRESET_INDEX.load(Ordering::SeqCst), 0);
+
+            // restore defaults for the rest of the suite
+            with_global_state(|state| {
+                let d = make_default_preset();
+                state.backend_type = d.backend_type;
+                state.upstream_uri = d.uri.clone();
+                state.model_name = String::new();
+                state.system_prompt = String::new();
+                state.api_key = String::new();
+                state.temperature = String::new();
+                state.include_language_hint = true;
+                state.insert_mode = InsertMode::Cursor;
+                state.presets = vec![d];
+            });
+            ACTIVE_PRESET_INDEX.store(0, Ordering::SeqCst);
+            CURL_TIMEOUT_INDEX.store(DEFAULT_CURL_TIMEOUT_INDEX as i32, Ordering::SeqCst);
+            MAX_TOKENS.store(0, Ordering::SeqCst);
+            THINKING_LOG_ENABLED.store(1, Ordering::SeqCst);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

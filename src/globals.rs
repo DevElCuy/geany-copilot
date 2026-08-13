@@ -51,3 +51,33 @@ where
     let mut guard = GLOBAL_STATE.lock().unwrap();
     f(guard.as_mut().unwrap())
 }
+
+#[cfg(test)]
+static TEST_GLOBALS_LOCK: Mutex<()> = Mutex::new(());
+
+/// Tests that touch process-wide state (the atomics, `GLOBAL_STATE`, or
+/// `request::ACTIVE_REQUEST`) take this lock so they cannot interleave.
+#[cfg(test)]
+pub fn test_globals_guard() -> std::sync::MutexGuard<'static, ()> {
+    TEST_GLOBALS_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn global_state_initializes_once_and_keeps_mutations() {
+        let _guard = test_globals_guard();
+        let original = with_global_state(|state| state.model_name.clone());
+        with_global_state(|state| state.model_name = "coverage-model".to_string());
+        init_global_state(); // must not reset already-initialized state
+        assert_eq!(
+            with_global_state(|state| state.model_name.clone()),
+            "coverage-model"
+        );
+        with_global_state(|state| state.model_name = original);
+    }
+}

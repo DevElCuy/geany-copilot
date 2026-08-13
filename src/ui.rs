@@ -924,3 +924,110 @@ pub unsafe extern "C" fn on_keybinding(
         _ => G_FALSE,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::make_default_preset;
+    use crate::globals::test_globals_guard;
+    use crate::request::{test_request_data, ACTIVE_REQUEST};
+    use crate::test_support::{fake_plugin, temp_dir};
+
+    #[test]
+    fn scintilla_colors_unpack_as_bgr() {
+        let red = scintilla_color_to_rgba(0x0000FF);
+        assert_eq!((red.red, red.green, red.blue, red.alpha), (1.0, 0.0, 0.0, 1.0));
+        let green = scintilla_color_to_rgba(0x00FF00);
+        assert_eq!((green.red, green.green, green.blue), (0.0, 1.0, 0.0));
+        let blue = scintilla_color_to_rgba(0xFF0000);
+        assert_eq!((blue.red, blue.green, blue.blue), (0.0, 0.0, 1.0));
+        let black = scintilla_color_to_rgba(0);
+        assert_eq!((black.red, black.green, black.blue, black.alpha), (0.0, 0.0, 0.0, 1.0));
+    }
+
+    #[test]
+    fn audit_timestamps_format_local_time() {
+        let ts = unsafe { audit_timestamp() };
+        assert_eq!(ts.len(), 19, "{}", ts); // YYYY-MM-DD HH:MM:SS
+        assert_eq!(ts.chars().filter(|c| *c == ':').count(), 2);
+        assert_eq!(ts.chars().filter(|c| *c == '-').count(), 2);
+    }
+
+    #[test]
+    fn panel_and_statusbar_calls_are_null_safe_without_gtk() {
+        let _guard = test_globals_guard();
+        unsafe {
+            assert!(P_DATA.is_null());
+            update_statusbar_preset_combo();
+            update_statusbar_timeout_combo();
+            update_statusbar_max_tokens_combo();
+            on_statusbar_preset_changed(ptr::null_mut(), ptr::null_mut());
+            on_statusbar_timeout_changed(ptr::null_mut(), ptr::null_mut());
+            on_statusbar_max_tokens_changed(ptr::null_mut(), ptr::null_mut());
+            on_panel_stop_clicked(ptr::null_mut(), ptr::null_mut());
+            on_panel_cancel_clicked(ptr::null_mut(), ptr::null_mut());
+            on_panel_clear_clicked(ptr::null_mut(), ptr::null_mut());
+            append_log_text(ptr::null_mut(), "x");
+            append_thinking_log("x");
+            append_copilot_error("status", "raw");
+            begin_copilot_request("model", "url", "payload", true);
+            update_copilot_panel_stats(1, 1.0);
+            finish_copilot_request("done");
+            set_copilot_panel_cancelling(true);
+            set_copilot_panel_cancelling(false);
+
+            set_thinking_log_enabled(ptr::null_mut(), false);
+            assert_eq!(THINKING_LOG_ENABLED.load(Ordering::SeqCst), 0);
+            set_thinking_log_enabled(ptr::null_mut(), true); // P_DATA null: no-op
+            THINKING_LOG_ENABLED.store(1, Ordering::SeqCst);
+        }
+    }
+
+    #[test]
+    fn preset_switching_wraps_persists_and_dispatches_from_keybindings() {
+        let _guard = test_globals_guard();
+        let dir = temp_dir("switch");
+        let mut fake = fake_plugin(&dir);
+        unsafe {
+            // empty preset list: switching is a no-op (but still saves)
+            with_global_state(|state| state.presets.clear());
+            ACTIVE_PRESET_INDEX.store(0, Ordering::SeqCst);
+            switch_to_next_preset(fake.ptr());
+            assert_eq!(ACTIVE_PRESET_INDEX.load(Ordering::SeqCst), 0);
+
+            with_global_state(|state| {
+                let mut second = make_default_preset();
+                second.name = "Second".to_string();
+                second.model = "m2".to_string();
+                state.presets = vec![make_default_preset(), second];
+            });
+            switch_to_next_preset(fake.ptr());
+            assert_eq!(ACTIVE_PRESET_INDEX.load(Ordering::SeqCst), 1);
+            assert_eq!(with_global_state(|s| s.model_name.clone()), "m2");
+
+            // keybinding id 1 is "next preset" and wraps back to 0
+            assert_eq!(on_keybinding(ptr::null_mut(), 1, fake.ptr() as GPointer), G_TRUE);
+            assert_eq!(ACTIVE_PRESET_INDEX.load(Ordering::SeqCst), 0);
+            assert_eq!(on_keybinding(ptr::null_mut(), 99, ptr::null_mut()), G_FALSE);
+
+            // with a request marked active, every ask entry point is a no-op
+            let req = Box::into_raw(test_request_data());
+            ACTIVE_REQUEST = req;
+            assert_eq!(on_keybinding(ptr::null_mut(), 0, ptr::null_mut()), G_TRUE);
+            on_tool_button_clicked(ptr::null_mut(), ptr::null_mut());
+            on_panel_ask_clicked(ptr::null_mut(), ptr::null_mut());
+            let still_active = ACTIVE_REQUEST;
+            assert_eq!(still_active, req);
+            ACTIVE_REQUEST = ptr::null_mut();
+            drop(Box::from_raw(req));
+
+            // restore defaults for the rest of the suite
+            with_global_state(|state| {
+                state.presets = vec![make_default_preset()];
+                state.model_name = String::new();
+            });
+            ACTIVE_PRESET_INDEX.store(0, Ordering::SeqCst);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

@@ -4,6 +4,8 @@ pub mod configure;
 pub mod ffi;
 pub mod globals;
 pub mod request;
+#[cfg(test)]
+pub mod test_support;
 pub mod ui;
 
 use config::load_config;

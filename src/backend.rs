@@ -1,4 +1,3 @@
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub const DEFAULT_OLLAMA_URI: &str = "http://localhost:11434";
@@ -6,7 +5,7 @@ pub const DEFAULT_OPENAI_COMPATIBLE_URI: &str = "http://localhost:11434/v1";
 pub const BACKEND_OLLAMA_ID: &str = "ollama";
 pub const BACKEND_OPENAI_COMPATIBLE_ID: &str = "openai-compatible";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BackendType {
     Ollama,
     OpenAICompatible,
@@ -43,31 +42,24 @@ impl BackendType {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct BackendPreset {
     pub name: String,
     pub backend_type: BackendType,
     pub uri: String,
     pub model: String,
-    #[serde(default)]
     pub system_prompt: String,
     /// Optional bearer token for servers that require authentication.  This is
     /// intentionally kept out of the request-payload audit because it is sent
     /// as an HTTP header rather than JSON.
-    #[serde(default)]
     pub api_key: String,
     /// An empty value means "let the server decide".
-    #[serde(default)]
     pub temperature: String,
-    #[serde(default = "default_language_hint")]
     pub include_language_hint: bool,
-    #[serde(default)]
     pub insert_mode: InsertMode,
 }
 
-fn default_language_hint() -> bool { true }
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InsertMode {
     Cursor,
     ReplaceSelection,
@@ -459,5 +451,179 @@ mod tests {
         assert_eq!(parse_temperature(" 1.5 "), Some(1.5));
         assert_eq!(parse_temperature(""), None);
         assert_eq!(parse_temperature("2.1"), None);
+    }
+
+    #[test]
+    fn backend_type_ids_labels_and_default_uris() {
+        assert_eq!(BackendType::from_id("openai-compatible"), BackendType::OpenAICompatible);
+        assert_eq!(BackendType::from_id("ollama"), BackendType::Ollama);
+        assert_eq!(BackendType::from_id("anything-else"), BackendType::Ollama);
+        assert_eq!(BackendType::Ollama.id(), BACKEND_OLLAMA_ID);
+        assert_eq!(BackendType::OpenAICompatible.id(), BACKEND_OPENAI_COMPATIBLE_ID);
+        assert_eq!(BackendType::Ollama.label(), "Ollama");
+        assert_eq!(BackendType::OpenAICompatible.label(), "OpenAI-compatible");
+        assert_eq!(BackendType::Ollama.default_uri(), DEFAULT_OLLAMA_URI);
+        assert_eq!(BackendType::OpenAICompatible.default_uri(), DEFAULT_OPENAI_COMPATIBLE_URI);
+    }
+
+    #[test]
+    fn insert_mode_ids_round_trip_and_default() {
+        assert_eq!(InsertMode::default(), InsertMode::Cursor);
+        for mode in [InsertMode::Cursor, InsertMode::ReplaceSelection, InsertMode::AppendAfterSelection] {
+            assert_eq!(InsertMode::from_id(mode.id()), mode);
+        }
+        assert_eq!(InsertMode::from_id("bogus"), InsertMode::Cursor);
+    }
+
+    #[test]
+    fn timeout_helpers_clamp_and_look_up() {
+        assert_eq!(active_curl_timeout_seconds(0), 30);
+        assert_eq!(active_curl_timeout_seconds(6), 600);
+        assert_eq!(active_curl_timeout_seconds(999), 60);
+        assert_eq!(curl_timeout_index_for_seconds(300), 4);
+        assert_eq!(curl_timeout_index_for_seconds(31), DEFAULT_CURL_TIMEOUT_INDEX);
+    }
+
+    #[test]
+    fn url_builders_cover_all_suffix_forms() {
+        assert_eq!(build_backend_url(BackendType::Ollama, "http://h:1/"), "http://h:1/api/generate");
+        assert_eq!(
+            build_backend_url(BackendType::OpenAICompatible, "http://h/v1/chat/completions"),
+            "http://h/v1/chat/completions"
+        );
+        assert_eq!(
+            build_backend_url(BackendType::OpenAICompatible, ""),
+            "http://localhost:11434/v1/chat/completions"
+        );
+        assert_eq!(build_model_list_url(BackendType::Ollama, ""), "http://localhost:11434/api/tags");
+        assert_eq!(build_model_list_url(BackendType::Ollama, "http://h/api/tags"), "http://h/api/tags");
+        assert_eq!(build_model_list_url(BackendType::Ollama, "http://h/api/generate"), "http://h/api/tags");
+        assert_eq!(
+            build_model_list_url(BackendType::OpenAICompatible, "http://h/v1/models"),
+            "http://h/v1/models"
+        );
+        assert_eq!(
+            build_model_list_url(BackendType::OpenAICompatible, "http://h/v1/chat/completions"),
+            "http://h/v1/models"
+        );
+        assert_eq!(build_model_list_url(BackendType::OpenAICompatible, "http://h"), "http://h/v1/models");
+    }
+
+    #[test]
+    fn temperature_parser_rejects_out_of_range_and_junk() {
+        assert_eq!(parse_temperature("0"), Some(0.0));
+        assert_eq!(parse_temperature("2.0"), Some(2.0));
+        assert_eq!(parse_temperature("-0.1"), None);
+        assert_eq!(parse_temperature("abc"), None);
+        assert_eq!(parse_temperature("inf"), None);
+    }
+
+    #[test]
+    fn response_parsers_cover_all_shapes() {
+        let v: Value = serde_json::from_str(r#"{"response":"x"}"#).unwrap();
+        assert_eq!(parse_ollama_response(&v), Some("x".to_string()));
+        let v: Value = serde_json::from_str(r#"{"other":1}"#).unwrap();
+        assert_eq!(parse_ollama_response(&v), None);
+
+        let delta: Value = serde_json::from_str(r#"{"choices":[{"delta":{"content":"d"}}]}"#).unwrap();
+        assert_eq!(parse_openai_compatible_response(&delta), Some("d".to_string()));
+        let message: Value = serde_json::from_str(r#"{"choices":[{"message":{"content":"m"}}]}"#).unwrap();
+        assert_eq!(parse_openai_compatible_response(&message), Some("m".to_string()));
+        let text: Value = serde_json::from_str(r#"{"choices":[{"text":"t"}]}"#).unwrap();
+        assert_eq!(parse_openai_compatible_response(&text), Some("t".to_string()));
+        let empty: Value = serde_json::from_str(r#"{"choices":[]}"#).unwrap();
+        assert_eq!(parse_openai_compatible_response(&empty), None);
+        let none: Value = serde_json::from_str("{}").unwrap();
+        assert_eq!(parse_openai_compatible_response(&none), None);
+    }
+
+    #[test]
+    fn api_errors_cover_object_string_and_absent_forms() {
+        let obj: Value = serde_json::from_str(r#"{"error":{"message":"m"}}"#).unwrap();
+        assert_eq!(parse_api_error(&obj), Some("API error: m".to_string()));
+        let plain: Value = serde_json::from_str(r#"{"error":"p"}"#).unwrap();
+        assert_eq!(parse_api_error(&plain), Some("API error: p".to_string()));
+        let odd: Value = serde_json::from_str(r#"{"error":{}}"#).unwrap();
+        assert_eq!(parse_api_error(&odd), None);
+        let missing: Value = serde_json::from_str("{}").unwrap();
+        assert_eq!(parse_api_error(&missing), None);
+    }
+
+    #[test]
+    fn model_list_reports_errors_and_skips_nameless_items() {
+        assert!(parse_model_list_response("not json", BackendType::Ollama)
+            .unwrap_err()
+            .starts_with("Invalid JSON"));
+        assert_eq!(
+            parse_model_list_response(r#"{"models":[]}"#, BackendType::Ollama).unwrap_err(),
+            "No models found in server response."
+        );
+        assert_eq!(
+            parse_model_list_response(r#"{"error":{"message":"bad key"}}"#, BackendType::OpenAICompatible)
+                .unwrap_err(),
+            "API error: bad key"
+        );
+        let list =
+            parse_model_list_response(r#"{"models":[{"name":"a"},{"size":1}]}"#, BackendType::Ollama).unwrap();
+        assert_eq!(list, vec!["a".to_string()]);
+    }
+
+    #[test]
+    fn complete_response_parses_both_backends_and_rejects_junk() {
+        assert_eq!(
+            parse_complete_response(r#"{"response":"r"}"#, BackendType::Ollama),
+            Some("r".to_string())
+        );
+        assert_eq!(
+            parse_complete_response(
+                r#"{"choices":[{"message":{"content":"c"}}]}"#,
+                BackendType::OpenAICompatible
+            ),
+            Some("c".to_string())
+        );
+        assert_eq!(parse_complete_response("junk", BackendType::Ollama), None);
+    }
+
+    #[test]
+    fn token_estimate_rounds_up_and_handles_empty() {
+        assert_eq!(estimate_token_count(""), 0);
+        assert_eq!(estimate_token_count("a"), 1);
+        assert_eq!(estimate_token_count("abcd"), 1);
+        assert_eq!(estimate_token_count("abcde"), 2);
+    }
+
+    #[test]
+    fn request_payload_dispatches_on_backend_type() {
+        let ollama: Value =
+            serde_json::from_str(&build_request_payload("ctx", BackendType::Ollama, "m", "", 0, None)).unwrap();
+        assert_eq!(ollama["prompt"], "ctx");
+        let openai: Value = serde_json::from_str(&build_request_payload(
+            "ctx",
+            BackendType::OpenAICompatible,
+            "m",
+            "",
+            0,
+            None,
+        ))
+        .unwrap();
+        assert_eq!(openai["messages"][0]["content"], "ctx");
+    }
+
+    #[test]
+    fn openai_choice_without_known_fields_yields_nothing() {
+        let odd: Value = serde_json::from_str(r#"{"choices":[{"foo":1}]}"#).unwrap();
+        assert_eq!(parse_openai_compatible_response(&odd), None);
+    }
+
+    #[test]
+    fn model_list_tolerates_non_array_models_field() {
+        assert_eq!(
+            parse_model_list_response(r#"{"models":"not-an-array"}"#, BackendType::Ollama).unwrap_err(),
+            "No models found in server response."
+        );
+        assert_eq!(
+            parse_model_list_response(r#"{"data":{"nested":true}}"#, BackendType::OpenAICompatible).unwrap_err(),
+            "No models found in server response."
+        );
     }
 }

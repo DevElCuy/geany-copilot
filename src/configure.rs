@@ -946,3 +946,87 @@ unsafe fn build_settings_form(
     gtk_widget_show_all(box_widget);
     box_widget
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::fake_plugin_with_main_widgets;
+
+    fn empty_widgets() -> ConfigWidgets {
+        ConfigWidgets {
+            plugin: ptr::null_mut(),
+            configure_dialog: ptr::null_mut(),
+            preset_combo: ptr::null_mut(),
+            preset_name_entry: ptr::null_mut(),
+            ollama_radio: ptr::null_mut(),
+            openai_compatible_radio: ptr::null_mut(),
+            uri_entry: ptr::null_mut(),
+            model_entry: ptr::null_mut(),
+            api_key_entry: ptr::null_mut(),
+            temperature_entry: ptr::null_mut(),
+            language_hint_check: ptr::null_mut(),
+            insert_mode_combo: ptr::null_mut(),
+            add_preset_button: ptr::null_mut(),
+            save_preset_button: ptr::null_mut(),
+            delete_preset_button: ptr::null_mut(),
+            select_model_button: ptr::null_mut(),
+            system_prompt_button: ptr::null_mut(),
+            timeout_combo: ptr::null_mut(),
+            max_tokens_combo: ptr::null_mut(),
+            thinking_log_check: ptr::null_mut(),
+            max_token_values: Vec::new(),
+            presets: Vec::new(),
+            active_preset_index: 0,
+            applying_preset: false,
+        }
+    }
+
+    #[test]
+    fn text_helpers_tolerate_null_widgets() {
+        unsafe {
+            assert_eq!(safe_get_entry_text(ptr::null_mut()), "");
+            assert_eq!(get_text_buffer_text(ptr::null_mut()), "");
+        }
+    }
+
+    #[test]
+    fn dialog_parent_resolution_prefers_the_configure_dialog() {
+        unsafe {
+            let mut widgets = empty_widgets();
+            // no dialog, no plugin
+            assert!(config_dialog_parent(&widgets).is_null());
+
+            // the dialog pointer is returned as-is, never dereferenced
+            widgets.configure_dialog = 0x1000 as *mut GtkDialog;
+            assert_eq!(config_dialog_parent(&widgets) as usize, 0x1000);
+
+            // a plugin with a widget table but no window resolves to null
+            widgets.configure_dialog = ptr::null_mut();
+            let mut fake = fake_plugin_with_main_widgets(&std::env::temp_dir());
+            widgets.plugin = fake.ptr();
+            assert!(config_dialog_parent(&widgets).is_null());
+        }
+    }
+
+    #[test]
+    fn preset_sync_and_apply_ignore_out_of_range_indices() {
+        unsafe {
+            let mut widgets = empty_widgets();
+            // empty preset list: both are no-ops and must not touch GTK
+            sync_active_preset_from_widgets(&mut widgets);
+            apply_preset_to_config_widgets(&mut widgets, 5);
+            assert!(widgets.presets.is_empty());
+            assert_eq!(widgets.active_preset_index, 0);
+        }
+    }
+
+    #[test]
+    fn widget_teardown_handles_null_and_owned_pointers() {
+        unsafe {
+            free_config_widgets(ptr::null_mut());
+            let boxed = Box::new(empty_widgets());
+            free_config_widgets(Box::into_raw(boxed) as GPointer);
+            on_settings_form_destroy(ptr::null_mut(), ptr::null_mut());
+        }
+    }
+}
