@@ -116,6 +116,10 @@ from the plugin) to manage presets:
 Request timeout and max response tokens are set from the status bar
 dropdowns and apply to all presets.
 
+If a preset points at a remote (non-localhost) server, use an `https://`
+URL: the API key and the document context around your cursor are sent with
+every request, and plain `http://` would expose both on the network.
+
 ## Usage
 
 1. (Optional) Assign keybindings: **Edit → Preferences → Keybindings**,

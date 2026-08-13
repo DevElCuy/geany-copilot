@@ -98,6 +98,13 @@ pub unsafe fn build_config_file_path(plugin: *mut GeanyPlugin) -> String {
     res
 }
 
+/// The config file stores API keys in plain text; GKeyFile writes it with
+/// umask-default (usually world-readable) permissions, so keep it owner-only.
+fn restrict_config_file_permissions(path: &str) {
+    use std::os::unix::fs::PermissionsExt;
+    let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+}
+
 pub fn make_default_preset() -> BackendPreset {
     BackendPreset {
         name: "Local Ollama".to_string(),
@@ -118,7 +125,7 @@ pub fn preset_group_name(index: usize) -> String {
 
 pub unsafe fn load_config(plugin: *mut GeanyPlugin) {
     let config_path = build_config_file_path(plugin);
-    let c_path = CString::new(config_path).unwrap();
+    let c_path = CString::new(config_path.as_str()).unwrap();
 
     let key_file = g_key_file_new();
     let mut error: *mut GError = ptr::null_mut();
@@ -187,6 +194,10 @@ pub unsafe fn load_config(plugin: *mut GeanyPlugin) {
         g_error_free(error);
     }
 
+    if loaded != 0 {
+        restrict_config_file_permissions(&config_path);
+    }
+
     if loaded_presets.is_empty() {
         loaded_presets.push(make_default_preset());
     }
@@ -222,7 +233,7 @@ pub unsafe fn save_config(plugin: *mut GeanyPlugin) {
     g_mkdir_with_parents(c_config_dir.as_ptr(), 0o700);
 
     let config_path = build_config_file_path(plugin);
-    let c_path = CString::new(config_path).unwrap();
+    let c_path = CString::new(config_path.as_str()).unwrap();
 
     let key_file = g_key_file_new();
     let c_settings = CString::new(CONFIG_GROUP_SETTINGS).unwrap();
@@ -271,6 +282,8 @@ pub unsafe fn save_config(plugin: *mut GeanyPlugin) {
     g_key_file_save_to_file(key_file, c_path.as_ptr(), &mut error);
     if !error.is_null() {
         g_error_free(error);
+    } else {
+        restrict_config_file_permissions(&config_path);
     }
     g_key_file_free(key_file);
 }

@@ -306,12 +306,14 @@ pub fn parse_model_list_response(body: &str, backend_type: BackendType) -> Resul
     let val: Value = serde_json::from_str(body).map_err(|e| format!("Invalid JSON: {}", e))?;
 
     let mut models = Vec::new();
+    // JSON strings may contain NUL bytes, but these names cross into GTK as
+    // C strings — strip NUL here rather than panic at the FFI boundary.
     match backend_type {
         BackendType::Ollama => {
             if let Some(arr) = val.get("models").and_then(|v| v.as_array()) {
                 for item in arr {
                     if let Some(name) = item.get("name").and_then(|v| v.as_str()) {
-                        models.push(name.to_string());
+                        models.push(name.replace('\0', ""));
                     }
                 }
             }
@@ -320,7 +322,7 @@ pub fn parse_model_list_response(body: &str, backend_type: BackendType) -> Resul
             if let Some(arr) = val.get("data").and_then(|v| v.as_array()) {
                 for item in arr {
                     if let Some(id) = item.get("id").and_then(|v| v.as_str()) {
-                        models.push(id.to_string());
+                        models.push(id.replace('\0', ""));
                     }
                 }
             }
@@ -424,6 +426,23 @@ mod tests {
         ))
         .unwrap();
         assert!(openai_default.get("max_tokens").is_none());
+    }
+
+    #[test]
+    fn model_list_strips_nul_bytes() {
+        let ollama = parse_model_list_response(
+            "{\"models\":[{\"name\":\"bad\\u0000name\"}]}",
+            BackendType::Ollama,
+        )
+        .unwrap();
+        assert_eq!(ollama, vec!["badname".to_string()]);
+
+        let openai = parse_model_list_response(
+            "{\"data\":[{\"id\":\"m\\u0000odel\"}]}",
+            BackendType::OpenAICompatible,
+        )
+        .unwrap();
+        assert_eq!(openai, vec!["model".to_string()]);
     }
 
     #[test]

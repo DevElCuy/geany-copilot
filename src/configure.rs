@@ -476,38 +476,47 @@ pub unsafe extern "C" fn on_select_model_clicked(_button: *mut GtkWidget, user_d
     let api_key = safe_get_entry_text(widgets.api_key_entry);
 
     let mut easy = curl::easy::Easy::new();
-    easy.url(&url).unwrap();
-    easy.timeout(std::time::Duration::from_secs(10)).unwrap();
-    if !api_key.is_empty() {
+    let mut error_msg = String::new();
+    if let Err(e) = easy
+        .url(&url)
+        .and_then(|_| easy.timeout(std::time::Duration::from_secs(10)))
+    {
+        error_msg = format!("curl setup error: {}", e);
+    }
+    if error_msg.is_empty() && !api_key.is_empty() {
         let mut headers = curl::easy::List::new();
-        headers
+        if headers
             .append(&format!("Authorization: Bearer {}", api_key))
-            .unwrap();
-        easy.http_headers(headers).unwrap();
+            .is_err()
+        {
+            error_msg = "curl setup error: invalid authorization header".to_string();
+        } else if let Err(e) = easy.http_headers(headers) {
+            error_msg = format!("curl setup error: {}", e);
+        }
     }
 
     let mut body = Vec::new();
-    let res = {
-        let mut transfer = easy.transfer();
-        transfer
-            .write_function(|data| {
+    if error_msg.is_empty() {
+        let res = {
+            let mut transfer = easy.transfer();
+            match transfer.write_function(|data| {
                 body.extend_from_slice(data);
                 Ok(data.len())
-            })
-            .unwrap();
-        transfer.perform()
-    };
-
-    let response_str = String::from_utf8_lossy(&body);
-
-    let mut error_msg = String::new();
-    if let Err(e) = res {
-        error_msg = format!("Connection error: {}", e);
-    } else if let Ok(status) = easy.response_code() {
-        if status >= 400 {
-            error_msg = format!("HTTP error {}", status);
+            }) {
+                Ok(()) => transfer.perform(),
+                Err(e) => Err(e),
+            }
+        };
+        if let Err(e) = res {
+            error_msg = format!("Connection error: {}", e);
+        } else if let Ok(status) = easy.response_code() {
+            if status >= 400 {
+                error_msg = format!("HTTP error {}", status);
+            }
         }
     }
+
+    let response_str = String::from_utf8_lossy(&body);
 
     let models_result = if error_msg.is_empty() {
         parse_model_list_response(&response_str, backend)
@@ -532,7 +541,7 @@ pub unsafe extern "C" fn on_select_model_clicked(_button: *mut GtkWidget, user_d
             let combo = gtk_combo_box_text_new();
 
             for m in &models {
-                let c_m = CString::new(m.as_str()).unwrap();
+                let c_m = CString::new(m.as_str()).unwrap_or_default();
                 gtk_combo_box_text_append_text(combo as *mut _, c_m.as_ptr());
             }
 
@@ -547,7 +556,7 @@ pub unsafe extern "C" fn on_select_model_clicked(_button: *mut GtkWidget, user_d
                 let active = gtk_combo_box_get_active(combo as *mut _);
                 if active >= 0 && (active as usize) < models.len() {
                     let selected = &models[active as usize];
-                    let c_selected = CString::new(selected.as_str()).unwrap();
+                    let c_selected = CString::new(selected.as_str()).unwrap_or_default();
                     gtk_entry_set_text(widgets.model_entry as *mut _, c_selected.as_ptr());
                 }
             }
@@ -559,7 +568,8 @@ pub unsafe extern "C" fn on_select_model_clicked(_button: *mut GtkWidget, user_d
                 "Failed to list models.\n\nURL: {}\nError: {}\n\nResponse:\n{}",
                 url, err, if response_str.is_empty() { "(empty)" } else { &response_str }
             );
-            let c_details = CString::new(details).unwrap();
+            // The raw response body can contain NUL bytes; never panic here.
+            let c_details = CString::new(details.replace('\0', "")).unwrap_or_default();
             let format = CString::new("%s").unwrap();
             let dialog = gtk_message_dialog_new(
                 if !widgets.plugin.is_null() && !(*widgets.plugin).geany_data.is_null() && !(*(*widgets.plugin).geany_data).main_widgets.is_null() { (*(*widgets.plugin).geany_data).main_widgets.as_ref().map_or(ptr::null_mut(), |w| (*w).window) } else { ptr::null_mut() },
